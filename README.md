@@ -1,194 +1,177 @@
-# More than a Hack 2027 — Phase 1: Ball Possession
+<div align="center">
 
-**Organised by [Metrica Sports](https://metrica-sports.com), [FC Barcelona](https://www.fcbarcelona.com)
-and the [Mobile World Capital Barcelona](https://www.mwcbarcelona.com)**, at the Talent Arena in Barcelona.
+# ⚽ PITCH COMMAND AI
+### Frame-Level Ball Possession from Tactical Tracking Data
 
-A football data challenge on real professional match data, open to analysts, data scientists and
-engineers. You are given one complete LaLiga match — two camera feeds, automatic tracking of every
-player and the ball, automatic tactical tagging, and the camera-to-pitch geometry — and one
-question to answer with it.
+[![Competition](https://shields.io)]()
+[![Python](https://shields.io)]()
+[![Pipeline](https://shields.io)]()
+[![Zero ML](https://shields.io)]()
 
----
+**Team:** `KYLIAN YAMAL DS` | **Final Submission:** `evaluation/results/my_v4.csv`  
+**Squad:** Gaddam Yashas • Kaivalya R Nayak • Kevin Alexandar
 
-## The task
+*No black-box neural networks. No external data. Just pure tactical geometry, physics, and football IQ.*
 
-**For every frame of the match, say who has the ball.**
-
+```text
+╔═════════════════════════════════════╤═════════════════════════════════════╗
+║ ┌───────────┐                       │                       ┌───────────┐ ║
+║ │           │                 . - ~ ┴ ~ - .                 │           │ ║
+║ │  ┌─────┐  │              .-'             '-.              │  ┌─────┐  │ ║
+║ │  │  H  │  │             /         ●         \             │  │  A  │  │ ║
+║ │  └─────┘  │            │      105.3m × 68m   │            │  └─────┘  │ ║
+║ │           │             \                   /             │           │ ║
+║ └───────────┘              '-.             .-'              └───────────┘ ║
+║                               ' - ~ ┬ ~ - '                               ║
+╚═════════════════════════════════════╧═════════════════════════════════════╝
 ```
-frame,label
-11185,A        away in possession, ball alive
-11186,A
-...
-18240,D        dead ball
-...
-18684,H        home in possession, ball alive
+
+</div>
+
+---
+
+## 🏟️ Match Overview
+
+This repository contains our solution for **More than a Hack 2027 (Phase 1)**. Every single frame of the tactical recording (`25 fps`) is evaluated by our transparent, rule-based pipeline (`my_v4.py`) and classified into one of four match states:
+
+| Code | Match State | Tactical Meaning |
+| :--- | :--- | :--- |
+| **`H`** | 🏠 **Home Possession** | Home squad holds clear, sustained control of the ball. |
+| **`A`** | ✈️ **Away Possession** | Away squad holds clear, sustained control of the ball. |
+| **`D`** | 🛑 **Dead Ball** | Play is stopped (out of bounds, set-piece setup, or walking pace). |
+| **`X`** | ⏱️ **Out of Play Window** | Frames outside the graded first and second halves defined in `games.py`. |
+
+> **Fair Play Declaration:** Public ground truth was used strictly to verify frame alignment, CSV schema formatting, and dead-ball definitions. **Zero parameters were tuned on ground-truth labels.**
+
+---
+
+## 📁 Repository Layout
+
+Our solution builds directly on top of the official challenge starter repository:
+
+```text
+├── data/                      # Raw match tracking & XML files (excluded from git)
+├── evaluation/
+│   ├── validate_submission.py # Official submission format & label validator
+│   └── results/               # Output directory for my_v4.csv
+├── starter/                   # Official challenge baseline scripts
+├── games.py                   # Pitch dimensions (105.3m × 68.0m) & graded half boundaries
+├── my_v1.py                   # Iteration 1: Initial proximity possession baseline
+├── my_v2.py                   # Iteration 2: Basic dead-ball filtering
+├── my_v3.py                   # Iteration 3: Smart Tagging set-piece windows
+├── my_v4.py                   # 🏆 FINAL PIPELINE: 5-clue dead-ball detector + hysteresis state machine
+├── requirements.txt           # Base challenge environment dependencies
+├── requirements-starter.txt   # Starter baseline dependencies
+├── requirements-mine.txt      # Exact dependency versions for my_v4.py (numpy, pandas, kloppy)
+└── CHALLENGE.md / DATA.md / EVALUATION.md / FAQ.md / OVERVIEW.md / RULES.md / SUBMISSION.md
 ```
 
-That is the whole task. One CSV, one row per video frame, 199,319 rows. It is scored automatically
-against a private frame-by-frame ground truth, so there is a number at the end and no argument
-about it — no jury, and no presentation to argue from.
+---
 
-The tracking is automatic and uncorrected: it has gaps and identity
-switches, and the ball itself is invisible on 41% of the frames you are scored on.
+## 📋 The Tactical Scouting Report (Data Pipeline)
+
+We strip away noisy broadcast feeds and build our match engine purely on pitch-coordinate geometry imported from `games.py`:
+
+* **✅ What Enters the Pitch:**
+  * **ATD Tracking:** Player & ball coordinates and player speeds (`video_frame = frame_id - 1`).
+  * **Squad Sheet:** Team assignments across all `46` track slots from the metadata XML.
+  * **Smart Tagging:** Set-piece start timestamps (`round(seconds × 25)`) and event types only.
+  * **Pitch Dimensions:** Normalized `0–1` coordinates scaled to `105.3m × 68.0m` with graded half boundaries from `games.py`.
+* **❌ Left on the Bench:**
+  * Unaligned broadcast video, homography transforms, raw video pixels, unreliable tracker ball-speed channels, and Smart Tagging `Team` / `phase` tags.
+* **🩹 Handling Missing Ball Data (`41%` of Graded Frames):**
+  * Short blind spots (`≤ 1.0 s`) are bridged using linear interpolation.
+  * Longer tracking dropouts remain missing—our possession state machine simply **holds the current team's possession** until fresh evidence arrives.
 
 ---
 
-## The challenge in one screen
+## 🚩 Component 1: The Assistant Referee (Dead-Ball Detector)
 
-| |                                                                                                                           |
-|---|---------------------------------------------------------------------------------------------------------------------------|
-| **Input** | one full match: tactical video, broadcast video, automatic tracking **with the ball** for both, Smart Tagging, homography |
-| **Output** | `frame,label` CSV, 199,319 rows, labels `H` / `A` / `D` / `X`                                                             |
-| **Ranked on** | `spellF1` — how many of the match's real possessions you recovered as whole possessions                                   |
-| **Also reported** | `macroF1` — the per-frame view, and the first tie-break                                                                   |
-| **Baseline to beat** | `spellF1` **0.2433**, in this repository                                                                                  |
-| **Ground truth you get** | the first **5 minutes** of play — to check your pipeline, not to train on                                              |
-| **Ground truth you are scored on** | the full match, **private**                                                                                               |
+A frame is flagged as **Dead Ball (`D`)** if *any* of these five whistles blow:
 
-It is deliberately **not** a tracking challenge. The tracking, tagging and homography are given to
-you so that nobody has to rebuild detection, re-identification and camera calibration before
-getting to the actual question. See [CHALLENGE.md](CHALLENGE.md).
+1. **Out of Bounds:** Ball coordinates cross outside the `105.3m × 68.0m` touchlines or goal lines.
+2. **Frozen Ball:** The ball travels less than `1.0 m` across a `4.0 s` window.
+3. **Walking Pace:** Mean team speed (averaged over `4.0 s` with `≥ 8` valid players between `0–12 m/s`) drops to `≤ 1.3 m/s` while the ball moves `≤ 6.0 m` in the surrounding `2.0 s`.
+4. **Set-Piece Buffer Zones:** Dynamic pre/post windows around Smart Tagging starts (derived from median stoppage profiles), snapping back early if the ball exited play for `≥ 0.2 s` in the prior `25 s`:
+   * **Throw-in:** `-2s / +6s` | **Corner:** `-8s / +3s` | **Goal Kick:** `-5s / +6s` | **Free Kick:** `-6s / +8s` | **Kick-off:** `-10s / +3s`
+5. **Pre-Kickoff Hold:** From the opening graded frame of each half until `3.0 s` after that half's `Kick Off (Start)` tag.
+
+> **VAR Cleanup Pass:** Live gaps shorter than `3.0 s` trapped between dead frames are merged into dead play, and dead-ball blips shorter than `2.0 s` are wiped out to prevent tracking glitches from splitting real possessions.
 
 ---
 
-## Try it right now
+## ⚡ Component 2: Possession State Machine
 
-The scorer, a 5-minute ground truth and four working baselines are in this repository. No
-enrolment, no download, no data:
+How do we decide who owns the ball? **Control requires proximity and commitment:**
 
+```text
+[Nearest Player <= 3.0m] AND [>= 1.0m Closer Than Opponent]
+                         │
+                         ▼ (Sustained for 50 frames / 2.0s)
+        🔄 POSSESSION FLIPS (Backdated to start of streak!)
+```
+
+* **Contested / Loose Balls:** Frames where neither team meets the proximity rule decrement the takeover counter; loose balls stay with the last team in control.
+* **Post-Stoppage Restart:** After any dead-ball stretch (`D`), the state resets. The first team to establish clear proximity control claims possession, and intermediate restart frames inherit that team's label.
+
+---
+
+## 📊 Telemetry & Sanity Checks
+
+Running `my_v4.py` across the full match data reproduces expected tracking telemetry and produces realistic match flow:
+
+| Telemetry Check | Pipeline Output |
+| :--- | :--- |
+| **Ball Visibility Reproduced** | `59.3%` of graded frames |
+| **Active Tracked Slots** | `20.5` average slots |
+| **Dead-Ball Share (`D`)** | `~42%` of graded frames |
+| **Total Possessions Detected** | `~200` spells (`~17 s` mean duration) |
+
+---
+
+## 🚀 Kick-Off: Reproducing `my_v4.csv`
+
+Follow these steps to run our final deterministic pipeline and validate the submission file:
+
+### 1. Set Up the Locker Room
+Ensure you have **Python 3.9+** installed, then install the exact pinned dependencies (`numpy`, `pandas`, `kloppy`):
 ```bash
-pip install -r requirements.txt
-python evaluation/run_evaluation.py
+pip install -r requirements-mine.txt
 ```
 
-Scored on the public 5 minutes, not on the full match -- which is why the order below is not the
-order of the floor quoted above:
-
-```
-scoreboard  gt/BAR-ATH_possession_gt_public.csv  199319 frames  7500 graded  21 gt segments
-ground truth has 17 possessions of mean 14.2 s  <- compare the poss and dur columns
-
-rank  submission                macroF1  spellF1   poss     dur  
-----  ------------------------  -------  -------  -----  ------  
-   1  baseline_smooth125         0.5812   0.4242     16    18.5  
-   2  baseline_smooth50          0.6207   0.3256     26    10.8  
-   3  baseline_smooth25          0.6200   0.2868     36     7.6  
-   4  baseline_raw               0.5972   0.0378    131     2.0  
+### 2. Verify Match Data Placement
+Place the downloaded competition match files inside the `data/` directory (already ignored by `.gitignore`):
+```text
+data/
 ```
 
-Those four are **the same algorithm four times** — nearest tracked player to the ball, then a
-majority vote over a window. Only the window changes. `macroF1` barely moves; `spellF1` moves by a
-factor of eleven. That disagreement is the whole point of the metric, and
-[EVALUATION.md](EVALUATION.md) explains it.
-
-Once you have the data, regenerate them yourself and go further:
-
+### 3. Run the Final Match Engine (`v4`)
+Execute the deterministic script to generate the frame-level predictions:
 ```bash
-python starter/baseline.py                              # rebuild the four baselines
-python evaluation/validate_submission.py <your>.csv     # before every submission
+python my_v4.py
+```
+*Output written to:* `evaluation/results/my_v4.csv`
+
+### 4. Official VAR Validation
+Run the official validation script in `evaluation/` to verify schema compliance and valid labels (`H`, `A`, `D`, `X`):
+```bash
+python evaluation/validate_submission.py evaluation/results/my_v4.csv
 ```
 
-**Validate every file before you submit it.** `validate_submission.py` runs exactly the checks the
-official scorer runs, and a file that fails them is dropped from the board with a one-line reason.
-It takes two seconds and it is the single most common way a good entry scores nothing.
+---
+
+## 🔮 Second-Half Tactical Adjustments (Limitations & Roadmap)
+
+* **Goal-Kick Speed Overlap:** The `1.3 m/s` walking-pace threshold sits close to slow build-up play and can occasionally over-flag slow live sequences as dead.
+* **Window-Based Restarts:** Fixed Smart Tagging buffers can delay restart detection by a few seconds; future versions will trigger restarts on **first purposeful ball acceleration**.
+* **Proximity-Only Control:** Adding explicit **touch/pass impulse detection** and utilizing the Smart Tagging `Team` field on restarts will sharpen turnover precision.
+* **Multi-Match Calibration:** Current thresholds are grounded in football domain logic; training parameters across multiple labeled matches will improve cross-match generalization.
 
 ---
 
-## Getting the data
+<div align="center">
 
-The match assets are released to enrolled participants who have accepted the terms of use.
+**Built with ⚽ and pure geometry by KYLIAN YAMAL DS**  
+*Refer to `CHALLENGE.md`, `RULES.md`, and `SUBMISSION.md` for official competition guidelines.*
 
-1. Enrol: **[More than A Hack 2027](https://landing.mobileworldcapital.com/more-than-a-hack-2027)**
-2. Read and sign the terms and conditions in the registration form
-3. You receive a download link.
-4. Unpack it into `./data`, or point `MTAH_DATA_DIR` at wherever you put it.
-
-Full description of every asset and how the frames line up: **[DATA.md](DATA.md)**.
-
----
-
-## Read these, in this order
-
-| | |
-|---|---|
-| **[CHALLENGE.md](CHALLENGE.md)** | the problem, the four labels, what counts as possession |
-| **[DATA.md](DATA.md)** | every provided asset, its format, and the frame alignment |
-| **[EVALUATION.md](EVALUATION.md)** | how you are scored, and why — read before optimising anything |
-| **[SUBMISSION.md](SUBMISSION.md)** | the file contract, the three deliverables, how to submit |
-| **[RULES.md](RULES.md)** | what you may and may not do |
-| **[FAQ.md](FAQ.md)** | |
-| **[OVERVIEW.md](OVERVIEW.md)** | the competition as a whole — context, why the 2027 format changed, the calendar |
-
-
----
-
-## What is in this repository
-
-```
-games.py                    per-match constants, asset paths and the frame alignment
-evaluation/
-  possession_metrics.py     the metric library — every number on the board is defined here
-  run_evaluation.py         the scorer. This exact file produces the official result
-  validate_submission.py    check a file before you send it
-  gt/                       the public 5-minute ground truth
-  results/                  the four baselines; put your submissions here
-starter/
-  baseline.py               the reference baseline, numpy only
-  load_atd.py               read the tracking and line it up with video frames
-  load_smart_tagging.py     read the tactical tagging as video-frame intervals
-  load_homography.py        read the homography; project pitch <-> pixels
-  utils.py                  pitch plotting for the notebooks
-  01_smart_tagging.ipynb    guided tour of the tactical tagging
-  02_tracking_atd.ipynb     guided tour of the tracking data, with plots
-  03_first_submission.ipynb data in, scored submission out — start here
-data/                       unpack the downloaded match assets here. Empty in a fresh clone
-```
-
-The scorer you run locally is the scorer that decides the competition. If it scores on your
-machine, it scores the same way on ours.
-
----
-
-## Requirements
-
-**Python 3.8 or newer.** The evaluation needs `numpy` and `pandas` and nothing else; it is tested
-under 3.8 and 3.11 and produces identical output under both. `starter/baseline.py` needs nothing
-more either — you can reach a scored submission without installing anything else.
-
-The notebooks additionally want `kloppy` and `matplotlib` (`requirements-starter.txt`), and
-**Python 3.9+ is recommended for those**: on Windows, installing Jupyter under 3.8 hits a
-`pywinpty` build failure that has nothing to do with this repository.
-
----
-
-## Timeline
-
-| |                |
-|---|----------------|
-| registration opens | **October 1, 2026** |
-| data released | **October 20, 2026** |
-| submission deadline | **November 17, 2026** |
-| results announced | **Before November 26, 2026**      |
-
----
-
-## Questions
-
-Open an issue for anything about the data, the metrics or the documentation — corrections are
-genuinely useful, and a fix that helps you helps everyone equally. For enrolment and the terms of
-use: **hackathon.talentarena@mobileworldcapital.com**.
-
-## Licence and citation
-
-The code and documentation in this repository are released under the MIT Licence — see
-[LICENSE](LICENSE). **The match data is not covered by it**: it is separately licensed for this
-competition only, under the terms you accept at enrolment.
-
-```bibtex
-@misc{mtah2027,
-  title  = {More than a Hack 2027: Phase 1 - Ball Possession},
-  author = {Metrica Sports and FC Barcelona Innovation Hub},
-  year   = {2027},
-  url    = {https://github.com/metrica-sports/more-than-a-hack-2027}
-}
-```
+</div>
